@@ -122,16 +122,26 @@ def _capture_matplotlib_plots(max_plots: int = 8):
         import matplotlib.pyplot as plt
         for number in list(plt.get_fignums())[:max_plots]:
             fig = plt.figure(number)
+            # Standardize exported canvas so all dashboard cards align.
+            try:
+                fig.set_size_inches(10.0, 5.8, forward=True)
+                fig.tight_layout(pad=1.25)
+            except Exception:
+                pass
+            title = "Grafik Evaluasi"
+            try:
+                if fig._suptitle and fig._suptitle.get_text().strip():
+                    title = fig._suptitle.get_text().strip()
+                elif fig.axes and fig.axes[0].get_title().strip():
+                    title = fig.axes[0].get_title().strip()
+            except Exception:
+                pass
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
-            plots.append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"))
-            buf.close()
-        plt.close("all")
+            fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor="white")
+            plots.append({"src":"data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), "title": title})
     except Exception:
-        pass
+        return []
     return plots
-
-
 
 def _dataset_summary(dataset_path: str):
     root=Path(dataset_path) if dataset_path else None
@@ -190,17 +200,21 @@ def _generate_standard_classification_plots(scope):
         h=getattr(hist,"history",{}) if hist is not None else {}
         if isinstance(h,dict) and h:
             if h.get("accuracy") or h.get("val_accuracy"):
-                plt.figure(figsize=(10,5.4))
-                if h.get("accuracy"): plt.plot(h["accuracy"],marker="o",label="Train Accuracy")
-                if h.get("val_accuracy"): plt.plot(h["val_accuracy"],marker="o",label="Validation Accuracy")
-                plt.xlabel("Epoch"); plt.ylabel("Accuracy"); plt.title("Accuracy dan Validation Accuracy")
-                plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+                fig,ax=plt.subplots(figsize=(10,5.8))
+                n=max(len(h.get("accuracy") or []),len(h.get("val_accuracy") or []))
+                epochs=np.arange(1,n+1)
+                if h.get("accuracy"): ax.plot(epochs,h["accuracy"],marker="o",linewidth=2,label="Train Accuracy")
+                if h.get("val_accuracy"): ax.plot(epochs,h["val_accuracy"],marker="o",linewidth=2,label="Validation Accuracy")
+                ax.set_xlabel("Epoch"); ax.set_ylabel("Accuracy"); ax.set_title("Accuracy vs Validation Accuracy")
+                ax.set_ylim(0,1.05); ax.set_xticks(epochs); ax.grid(axis="y",alpha=.20); ax.legend(frameon=False); fig.tight_layout()
             if h.get("loss") or h.get("val_loss"):
-                plt.figure(figsize=(10,5.4))
-                if h.get("loss"): plt.plot(h["loss"],marker="o",label="Train Loss")
-                if h.get("val_loss"): plt.plot(h["val_loss"],marker="o",label="Validation Loss")
-                plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.title("Loss dan Validation Loss")
-                plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+                fig,ax=plt.subplots(figsize=(10,5.8))
+                n=max(len(h.get("loss") or []),len(h.get("val_loss") or []))
+                epochs=np.arange(1,n+1)
+                if h.get("loss"): ax.plot(epochs,h["loss"],marker="o",linewidth=2,label="Train Loss")
+                if h.get("val_loss"): ax.plot(epochs,h["val_loss"],marker="o",linewidth=2,label="Validation Loss")
+                ax.set_xlabel("Epoch"); ax.set_ylabel("Loss"); ax.set_title("Loss vs Validation Loss")
+                ax.set_xticks(epochs); ax.grid(axis="y",alpha=.20); ax.legend(frameon=False); fig.tight_layout()
 
         ys=[]
         for _x,y in val_ds:
@@ -226,7 +240,7 @@ def _generate_standard_classification_plots(scope):
         }
 
         cm=confusion_matrix(y_true,y_pred,labels=list(range(nclasses)))
-        plt.figure(figsize=(7.2,6.2))
+        plt.figure(figsize=(10,5.8))
         plt.imshow(cm,cmap="Blues",aspect="equal")
         plt.title("Confusion Matrix")
         plt.xlabel("Predicted"); plt.ylabel("Actual")
@@ -238,7 +252,7 @@ def _generate_standard_classification_plots(scope):
                 plt.text(j,i,int(cm[i,j]),ha="center",va="center",color="white" if cm[i,j]>threshold else "black")
         plt.tight_layout()
 
-        plt.figure(figsize=(8.5,6.2))
+        plt.figure(figsize=(10,5.8))
         auc_values=[]
         if nclasses==2:
             fpr,tpr,_=roc_curve(y_true,y_prob[:,1]); a=auc(fpr,tpr); auc_values.append(a)
