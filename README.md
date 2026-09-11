@@ -1,9 +1,9 @@
-# ML Learning Lab Runpod Worker v4
+# ML Learning Lab Runpod Worker v5
 
-Perbaikan dataset classification:
-- otomatis melewati folder pembungkus tunggal hasil ekstraksi ZIP;
-- `DATASET_PATH` diarahkan ke folder yang benar-benar berisi folder kelas;
-- mencegah Keras membaca nama folder ZIP sebagai satu-satunya kelas;
-- tetap membersihkan output terminal dan mengirim plot matplotlib.
+Perubahan utama:
+- mempertahankan auto-resolve folder wrapper dataset classification;
+- membersihkan output terminal/ANSI;
+- menangkap matplotlib plots;
+- mengirim `summary` eksperimen: device GPU, model, jumlah parameter, durasi, jumlah citra/kelas, dan metrik numerik dari `RESULT`/Keras History.
 
-Setelah mengganti file worker di GitHub, build/release ulang endpoint Runpod.
+Upload `handler.py`, `requirements.txt`, dan `Dockerfile` ke repository worker Runpod lalu deploy/release ulang endpoint.

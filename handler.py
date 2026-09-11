@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import traceback
 import zipfile
 from pathlib import Path
@@ -131,6 +132,63 @@ def _capture_matplotlib_plots(max_plots: int = 8):
     return plots
 
 
+
+def _dataset_summary(dataset_path: str):
+    root=Path(dataset_path) if dataset_path else None
+    if not root or not root.exists(): return 0,0
+    images=[]
+    try: images=[p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
+    except Exception: pass
+    classes=set()
+    for p in images:
+        try:
+            rel=p.relative_to(root)
+            if len(rel.parts)>=2: classes.add(rel.parts[0])
+        except Exception: pass
+    return len(images),len(classes)
+
+
+def _detect_gpu():
+    try:
+        import torch
+        if torch.cuda.is_available(): return torch.cuda.get_device_name(0)
+    except Exception: pass
+    try:
+        import tensorflow as tf
+        g=tf.config.list_physical_devices("GPU")
+        if g: return g[0].name.replace("/physical_device:","")
+    except Exception: pass
+    return "CPU / GPU tidak terdeteksi"
+
+
+def _numeric_metrics_from_result(result):
+    out={}
+    if isinstance(result,dict):
+        candidates=result.get("metrics") if isinstance(result.get("metrics"),dict) else result
+        for k,v in candidates.items():
+            if isinstance(v,(int,float)) and not isinstance(v,bool): out[str(k)]=float(v)
+    return out
+
+
+def _runtime_summary(scope, result, dataset_path, task, elapsed):
+    model=scope.get("model")
+    model_name=None; params=None
+    if model is not None:
+        model_name=getattr(model,"name",None) or model.__class__.__name__
+        try: params=int(model.count_params())
+        except Exception: pass
+    if not model_name and isinstance(result,dict): model_name=result.get("model") or result.get("model_name") or result.get("title")
+    hist=scope.get("history") or scope.get("hist")
+    metrics=_numeric_metrics_from_result(result)
+    try:
+        h=getattr(hist,"history",None)
+        if isinstance(h,dict):
+            for key,vals in h.items():
+                if vals and isinstance(vals[-1],(int,float)): metrics[f"Final {key}"]=float(vals[-1])
+    except Exception: pass
+    images,classes=_dataset_summary(dataset_path)
+    return {"task":str(task),"model":model_name or "Python Final Project","parameters":params,"gpu":_detect_gpu(),"duration_sec":round(float(elapsed),2),"dataset_images":images,"dataset_classes":classes,"metrics":metrics}
+
 def handler(job):
     payload = job.get("input") or {}
     code = (payload.get("code") or "").strip()
@@ -140,6 +198,7 @@ def handler(job):
     stdout = io.StringIO()
     stderr = io.StringIO()
     temp_root = None
+    started=time.perf_counter()
     try:
         dataset_path = ""
         task = payload.get("task") or "classification"
@@ -168,11 +227,13 @@ def handler(job):
 
         result = _json_safe(scope.get("RESULT")) if "RESULT" in scope else None
         plots = _capture_matplotlib_plots()
+        summary=_runtime_summary(scope,result,dataset_path,task,time.perf_counter()-started)
         return {
             "ok": True,
             "stdout": _clean_console(stdout.getvalue())[-50000:],
             "stderr": _clean_console(stderr.getvalue())[-12000:],
             "result": result,
+            "summary": summary,
             "plots": plots,
         }
     except Exception:
