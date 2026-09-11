@@ -1,0 +1,9 @@
+runpod
+requests
+numpy
+pandas
+matplotlib
+scikit-learn
+pillow
+tensorflow
+ultralytics
