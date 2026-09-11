@@ -1,4 +1,4 @@
-"""Runpod Serverless worker for ML Learning Lab v3.
+"""Runpod Serverless worker for ML Learning Lab v6.
 
 Adds clean terminal output and captures matplotlib figures so remote GPU results
 can be displayed inside the ML Learning Lab UI, closer to a notebook experience.
@@ -170,6 +170,92 @@ def _numeric_metrics_from_result(result):
     return out
 
 
+
+
+def _generate_standard_classification_plots(scope):
+    """Generate standard Step-10 evaluation figures when model/history/val_ds exist."""
+    try:
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import confusion_matrix, roc_curve, auc, accuracy_score, precision_score, recall_score, f1_score
+        from sklearn.preprocessing import label_binarize
+
+        model=scope.get("model")
+        val_ds=scope.get("val_ds") or scope.get("validation_ds") or scope.get("test_ds")
+        hist=scope.get("history") or scope.get("hist")
+        class_names=scope.get("CLASS_NAMES") or scope.get("class_names")
+        if model is None or val_ds is None:
+            return {}
+
+        h=getattr(hist,"history",{}) if hist is not None else {}
+        if isinstance(h,dict) and h:
+            if h.get("accuracy") or h.get("val_accuracy"):
+                plt.figure(figsize=(10,5.4))
+                if h.get("accuracy"): plt.plot(h["accuracy"],marker="o",label="Train Accuracy")
+                if h.get("val_accuracy"): plt.plot(h["val_accuracy"],marker="o",label="Validation Accuracy")
+                plt.xlabel("Epoch"); plt.ylabel("Accuracy"); plt.title("Accuracy dan Validation Accuracy")
+                plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+            if h.get("loss") or h.get("val_loss"):
+                plt.figure(figsize=(10,5.4))
+                if h.get("loss"): plt.plot(h["loss"],marker="o",label="Train Loss")
+                if h.get("val_loss"): plt.plot(h["val_loss"],marker="o",label="Validation Loss")
+                plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.title("Loss dan Validation Loss")
+                plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+
+        ys=[]
+        for _x,y in val_ds:
+            try: ys.append(np.asarray(y))
+            except Exception: pass
+        if not ys: return {}
+        y_true=np.concatenate(ys,axis=0).astype(int).reshape(-1)
+        y_prob=np.asarray(model.predict(val_ds,verbose=0))
+        if y_prob.ndim==1:
+            y_prob=np.column_stack([1-y_prob,y_prob])
+        if y_prob.ndim==2 and y_prob.shape[1]==1:
+            p=y_prob[:,0]; y_prob=np.column_stack([1-p,p])
+        y_pred=np.argmax(y_prob,axis=1)
+        nclasses=int(y_prob.shape[1])
+        if not class_names or len(class_names)!=nclasses:
+            class_names=[str(i) for i in range(nclasses)]
+
+        metrics={
+            "Accuracy": float(accuracy_score(y_true,y_pred)),
+            "Precision": float(precision_score(y_true,y_pred,average="macro",zero_division=0)),
+            "Recall": float(recall_score(y_true,y_pred,average="macro",zero_division=0)),
+            "F1-score": float(f1_score(y_true,y_pred,average="macro",zero_division=0)),
+        }
+
+        cm=confusion_matrix(y_true,y_pred,labels=list(range(nclasses)))
+        plt.figure(figsize=(7.2,6.2))
+        plt.imshow(cm,cmap="Blues",aspect="equal")
+        plt.title("Confusion Matrix")
+        plt.xlabel("Predicted"); plt.ylabel("Actual")
+        plt.xticks(range(nclasses),class_names,rotation=45,ha="right")
+        plt.yticks(range(nclasses),class_names)
+        threshold=(cm.max()/2.0) if cm.size else 0
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                plt.text(j,i,int(cm[i,j]),ha="center",va="center",color="white" if cm[i,j]>threshold else "black")
+        plt.tight_layout()
+
+        plt.figure(figsize=(8.5,6.2))
+        auc_values=[]
+        if nclasses==2:
+            fpr,tpr,_=roc_curve(y_true,y_prob[:,1]); a=auc(fpr,tpr); auc_values.append(a)
+            plt.plot(fpr,tpr,label=f"ROC AUC = {a:.3f}")
+        else:
+            y_bin=label_binarize(y_true,classes=np.arange(nclasses))
+            for i,name in enumerate(class_names):
+                fpr,tpr,_=roc_curve(y_bin[:,i],y_prob[:,i]); a=auc(fpr,tpr); auc_values.append(a)
+                plt.plot(fpr,tpr,label=f"{name} (AUC={a:.3f})")
+        plt.plot([0,1],[0,1],linestyle="--")
+        plt.xlabel("False Positive Rate"); plt.ylabel("True Positive Rate"); plt.title("ROC Curve")
+        plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+        if auc_values: metrics["ROC-AUC"] = float(np.mean(auc_values))
+        return metrics
+    except Exception:
+        return {}
+
 def _runtime_summary(scope, result, dataset_path, task, elapsed):
     model=scope.get("model")
     model_name=None; params=None
@@ -226,8 +312,11 @@ def handler(job):
             exec(compile(code, "student_final_project.py", "exec"), scope, scope)
 
         result = _json_safe(scope.get("RESULT")) if "RESULT" in scope else None
+        auto_metrics = _generate_standard_classification_plots(scope) if str(task).lower()=="classification" else {}
         plots = _capture_matplotlib_plots()
         summary=_runtime_summary(scope,result,dataset_path,task,time.perf_counter()-started)
+        if auto_metrics:
+            summary.setdefault("metrics",{}).update(auto_metrics)
         return {
             "ok": True,
             "stdout": _clean_console(stdout.getvalue())[-50000:],
