@@ -3,7 +3,9 @@
 Adds clean terminal output and captures matplotlib figures so remote GPU results
 can be displayed inside the ML Learning Lab UI, closer to a notebook experience.
 """
+import ast
 import base64
+import copy
 import contextlib
 import io
 import json
@@ -19,7 +21,7 @@ from pathlib import Path
 import requests
 import runpod
 
-WORKER_VERSION = "v8"
+WORKER_VERSION = "v9"
 
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
@@ -242,21 +244,70 @@ def _generate_standard_classification_plots(scope):
 
         plt.figure(figsize=(8.5,6.2))
         auc_values=[]
-        if nclasses==2:
+        if len(np.unique(y_true)) < 2:
+            plt.text(0.5,0.5,"ROC belum dapat dihitung\nValidation set hanya berisi 1 kelas",ha="center",va="center",fontsize=12)
+            plt.xlim(0,1); plt.ylim(0,1)
+        elif nclasses==2:
             fpr,tpr,_=roc_curve(y_true,y_prob[:,1]); a=auc(fpr,tpr); auc_values.append(a)
             plt.plot(fpr,tpr,label=f"ROC AUC = {a:.3f}")
         else:
             y_bin=label_binarize(y_true,classes=np.arange(nclasses))
             for i,name in enumerate(class_names):
-                fpr,tpr,_=roc_curve(y_bin[:,i],y_prob[:,i]); a=auc(fpr,tpr); auc_values.append(a)
+                col=y_bin[:,i]
+                if len(np.unique(col)) < 2:
+                    continue
+                fpr,tpr,_=roc_curve(col,y_prob[:,i]); a=auc(fpr,tpr); auc_values.append(a)
                 plt.plot(fpr,tpr,label=f"{name} (AUC={a:.3f})")
         plt.plot([0,1],[0,1],linestyle="--")
         plt.xlabel("False Positive Rate"); plt.ylabel("True Positive Rate"); plt.title("ROC Curve")
-        plt.grid(alpha=.25); plt.legend(); plt.tight_layout()
+        plt.grid(alpha=.25)
+        if plt.gca().get_legend_handles_labels()[0]: plt.legend()
+        plt.tight_layout()
         if auc_values: metrics["ROC-AUC"] = float(np.mean(auc_values))
         return metrics
     except Exception:
         return {}
+
+
+def _repair_broken_roc_literal(code):
+    """Repair v16.84 Final Project template accidentally emitting a real newline inside a quoted ROC message."""
+    if not isinstance(code, str):
+        return code
+    broken = '"ROC belum dapat dihitung\nValidation set hanya berisi 1 kelas"'
+    fixed = '"ROC belum dapat dihitung\\nValidation set hanya berisi 1 kelas"'
+    return code.replace(broken, fixed)
+
+def _patch_classification_report_calls(code):
+    """Backwards compatibility for saved Step-10 templates.
+
+    sklearn classification_report requires labels when target_names describes
+    more classes than are present in y_true/y_pred.  Small validation splits can
+    legitimately contain only one class, so add labels=range(len(target_names))
+    automatically when the student's call omitted it.
+    """
+    try:
+        tree = ast.parse(code)
+        class Guard(ast.NodeTransformer):
+            def visit_Call(self, node):
+                self.generic_visit(node)
+                name = node.func.id if isinstance(node.func, ast.Name) else None
+                if name != "classification_report":
+                    return node
+                kws = {k.arg: k for k in node.keywords if k.arg}
+                if "target_names" in kws and "labels" not in kws:
+                    target_expr = copy.deepcopy(kws["target_names"].value)
+                    labels_expr = ast.Call(
+                        func=ast.Name(id="range", ctx=ast.Load()),
+                        args=[ast.Call(func=ast.Name(id="len", ctx=ast.Load()), args=[target_expr], keywords=[])],
+                        keywords=[]
+                    )
+                    node.keywords.append(ast.keyword(arg="labels", value=labels_expr))
+                return node
+        tree = Guard().visit(tree)
+        ast.fix_missing_locations(tree)
+        return ast.unparse(tree)
+    except Exception:
+        return code
 
 def _runtime_summary(scope, result, dataset_path, task, elapsed):
     model=scope.get("model")
@@ -309,6 +360,10 @@ def handler(job):
             plt.show = lambda *args, **kwargs: None
         except Exception:
             pass
+
+        if str(task).lower() == "classification":
+            code = _repair_broken_roc_literal(code)
+            code = _patch_classification_report_calls(code)
 
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compile(code, "student_final_project.py", "exec"), scope, scope)
