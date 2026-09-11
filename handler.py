@@ -21,6 +21,56 @@ import runpod
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
+
+
+def _visible_dirs(path: Path):
+    try:
+        return [p for p in path.iterdir() if p.is_dir() and not p.name.startswith(".") and p.name != "__MACOSX"]
+    except Exception:
+        return []
+
+
+def _direct_images(path: Path):
+    try:
+        return [p for p in path.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
+    except Exception:
+        return []
+
+
+def _has_images_recursive(path: Path) -> bool:
+    try:
+        for p in path.rglob("*"):
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _resolve_classification_root(dataset_path: str) -> str:
+    """Remove common single wrapper folders from extracted classification ZIPs.
+
+    Example: extracted/dataset_name/cat/*.jpg + dog/*.jpg should expose
+    extracted/dataset_name as DATASET_PATH, not extracted (which Keras would
+    interpret as a single class named dataset_name).
+    """
+    current = Path(dataset_path).resolve()
+    for _ in range(8):
+        dirs = _visible_dirs(current)
+        direct_imgs = _direct_images(current)
+        # If this level already has 2+ plausible class directories, keep it.
+        class_dirs = [d for d in dirs if _has_images_recursive(d)]
+        if len(class_dirs) >= 2:
+            return str(current)
+        # Common ZIP wrapper: one directory, no images at this level.
+        if not direct_imgs and len(dirs) == 1 and _has_images_recursive(dirs[0]):
+            current = dirs[0]
+            continue
+        return str(current)
+    return str(current)
+
+
 def _clean_console(value: str) -> str:
     text = ANSI_RE.sub("", str(value or ""))
     out = []
@@ -92,11 +142,13 @@ def handler(job):
     temp_root = None
     try:
         dataset_path = ""
+        task = payload.get("task") or "classification"
         dataset_url = (payload.get("dataset_url") or "").strip()
         if dataset_url:
             dataset_path, temp_root = _prepare_dataset(dataset_url)
+            if str(task).lower() == "classification":
+                dataset_path = _resolve_classification_root(dataset_path)
 
-        task = payload.get("task") or "classification"
         os.environ["DATASET_PATH"] = dataset_path
         os.environ["ML_TASK"] = str(task)
         os.environ.setdefault("MPLBACKEND", "Agg")

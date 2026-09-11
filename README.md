@@ -1,5 +1,9 @@
-# ML Learning Lab Runpod Worker v3
+# ML Learning Lab Runpod Worker v4
 
-Update these files in the GitHub repo used by your Runpod Serverless endpoint, commit, then rebuild/release the endpoint.
+Perbaikan dataset classification:
+- otomatis melewati folder pembungkus tunggal hasil ekstraksi ZIP;
+- `DATASET_PATH` diarahkan ke folder yang benar-benar berisi folder kelas;
+- mencegah Keras membaca nama folder ZIP sebagai satu-satunya kelas;
+- tetap membersihkan output terminal dan mengirim plot matplotlib.
 
-v3 adds ANSI-clean output and matplotlib plot capture for the ML Learning Lab Final Project UI.
+Setelah mengganti file worker di GitHub, build/release ulang endpoint Runpod.
