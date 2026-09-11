@@ -1,9 +1,6 @@
-# ML Learning Lab Runpod Worker v5
+# ML Learning Lab Runpod Worker v9
 
-Perubahan utama:
-- mempertahankan auto-resolve folder wrapper dataset classification;
-- membersihkan output terminal/ANSI;
-- menangkap matplotlib plots;
-- mengirim `summary` eksperimen: device GPU, model, jumlah parameter, durasi, jumlah citra/kelas, dan metrik numerik dari `RESULT`/Keras History.
-
-Upload `handler.py`, `requirements.txt`, dan `Dockerfile` ke repository worker Runpod lalu deploy/release ulang endpoint.
+Fix Step 10 for small validation sets:
+- Automatically adds labels to old classification_report calls that use target_names.
+- ROC gracefully handles a validation split containing only one class.
+- Keeps compatibility with existing saved Monaco templates.
