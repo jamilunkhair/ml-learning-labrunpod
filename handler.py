@@ -1,13 +1,14 @@
-"""Runpod Serverless worker for ML Learning Lab.
+"""Runpod Serverless worker for ML Learning Lab v3.
 
-Runpod's GitHub deploy scanner looks for the canonical entrypoint below:
-    runpod.serverless.start({"handler": handler})
+Adds clean terminal output and captures matplotlib figures so remote GPU results
+can be displayed inside the ML Learning Lab UI, closer to a notebook experience.
 """
-
+import base64
 import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import traceback
@@ -17,9 +18,21 @@ from pathlib import Path
 import requests
 import runpod
 
+ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _clean_console(value: str) -> str:
+    text = ANSI_RE.sub("", str(value or ""))
+    out = []
+    for line in text.split("\n"):
+        # Keep only the latest redraw of progress lines (\r).
+        out.append(line.split("\r")[-1])
+    text = "\n".join(out)
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+    return text.strip()
+
 
 def _safe_extract(zip_path: str, destination: str) -> None:
-    """Extract ZIP while preventing path traversal."""
     dest = Path(destination).resolve()
     with zipfile.ZipFile(zip_path) as archive:
         for member in archive.infolist():
@@ -30,25 +43,21 @@ def _safe_extract(zip_path: str, destination: str) -> None:
 
 
 def _prepare_dataset(url: str) -> tuple[str, str]:
-    """Download presigned S3 ZIP and return (dataset_path, temp_root)."""
     root = tempfile.mkdtemp(prefix="ml_learning_lab_")
     zip_path = os.path.join(root, "dataset.zip")
     dataset_path = os.path.join(root, "dataset")
     os.makedirs(dataset_path, exist_ok=True)
-
     with requests.get(url, stream=True, timeout=(20, 300)) as response:
         response.raise_for_status()
         with open(zip_path, "wb") as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     output.write(chunk)
-
     _safe_extract(zip_path, dataset_path)
     return dataset_path, root
 
 
 def _json_safe(value):
-    """Best-effort conversion for values returned by student code."""
     try:
         json.dumps(value)
         return value
@@ -56,8 +65,23 @@ def _json_safe(value):
         return repr(value)
 
 
+def _capture_matplotlib_plots(max_plots: int = 8):
+    plots = []
+    try:
+        import matplotlib.pyplot as plt
+        for number in list(plt.get_fignums())[:max_plots]:
+            fig = plt.figure(number)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+            plots.append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"))
+            buf.close()
+        plt.close("all")
+    except Exception:
+        pass
+    return plots
+
+
 def handler(job):
-    """Run one ML Learning Lab final-project job."""
     payload = job.get("input") or {}
     code = (payload.get("code") or "").strip()
     if not code:
@@ -66,7 +90,6 @@ def handler(job):
     stdout = io.StringIO()
     stderr = io.StringIO()
     temp_root = None
-
     try:
         dataset_path = ""
         dataset_url = (payload.get("dataset_url") or "").strip()
@@ -77,29 +100,36 @@ def handler(job):
         os.environ["DATASET_PATH"] = dataset_path
         os.environ["ML_TASK"] = str(task)
         os.environ.setdefault("MPLBACKEND", "Agg")
+        os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-        scope = {
-            "__name__": "__main__",
-            "DATASET_PATH": dataset_path,
-            "ML_TASK": task,
-        }
+        scope = {"__name__": "__main__", "DATASET_PATH": dataset_path, "ML_TASK": task}
+
+        # In a headless worker, keep figures alive so the UI can receive them.
+        try:
+            import matplotlib.pyplot as plt
+            plt.show = lambda *args, **kwargs: None
+        except Exception:
+            pass
 
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compile(code, "student_final_project.py", "exec"), scope, scope)
 
-        # Optional convention: student code can assign RESULT = {...}
         result = _json_safe(scope.get("RESULT")) if "RESULT" in scope else None
+        plots = _capture_matplotlib_plots()
         return {
             "ok": True,
-            "stdout": stdout.getvalue(),
-            "stderr": stderr.getvalue(),
+            "stdout": _clean_console(stdout.getvalue())[-50000:],
+            "stderr": _clean_console(stderr.getvalue())[-12000:],
             "result": result,
+            "plots": plots,
         }
     except Exception:
+        plots = _capture_matplotlib_plots()
         return {
             "ok": False,
-            "stdout": stdout.getvalue(),
-            "stderr": stderr.getvalue(),
+            "stdout": _clean_console(stdout.getvalue())[-50000:],
+            "stderr": _clean_console(stderr.getvalue())[-12000:],
+            "plots": plots,
             "error": traceback.format_exc(),
         }
     finally:
@@ -107,8 +137,5 @@ def handler(job):
             shutil.rmtree(temp_root, ignore_errors=True)
 
 
-# IMPORTANT: keep this canonical Runpod entrypoint literal in the repository.
-# It is intentionally inside __main__ so importing this module in tests does
-# not start a worker, while `python handler.py` (Docker CMD) does.
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})

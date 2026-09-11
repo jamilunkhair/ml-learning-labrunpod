@@ -1,19 +1,5 @@
-# ML Learning Lab - Runpod Serverless Worker
+# ML Learning Lab Runpod Worker v3
 
-Upload these files to the **root** of the GitHub repository:
+Update these files in the GitHub repo used by your Runpod Serverless endpoint, commit, then rebuild/release the endpoint.
 
-- `handler.py`
-- `requirements.txt`
-- `Dockerfile`
-
-Runpod GitHub deploy settings:
-
-- Branch: `main`
-- Dockerfile path: `/Dockerfile`
-- Endpoint type: `Queue`
-
-The canonical Runpod Serverless entrypoint is present literally in `handler.py`:
-
-```python
-runpod.serverless.start({"handler": handler})
-```
+v3 adds ANSI-clean output and matplotlib plot capture for the ML Learning Lab Final Project UI.
